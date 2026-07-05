@@ -110,6 +110,7 @@ AI-powered job search automation built on Claude Code: pipeline tracking, offer 
 | `set-status.mjs` | Canonical CLI to update a tracker row: `node set-status.mjs <report#\|company> <State> [--note]` — strict states.yml validation, shared tracker lock, atomic write |
 | `salary-gap.mjs` | Desired/advertised/actual compensation gap analyzer — folds report `advertised_comp` + `data/salary-observations.tsv` (JSON or `--summary`) |
 | `data/salary-observations.tsv` | Append-only salary observation log (user layer) |
+| `jd-skill-gap.mjs` | Zero-LLM JD skill-gap checker — classifies a JD's required skills against `cv.md` into existing / supportedByResume / gap so a CV can be tailored honestly (JSON or `--summary` output); never auto-adds a claim to `cv.md` |
 | `data/follow-ups.md` | Follow-up history tracker |
 | `scan.mjs` | Zero-token portal scanner — hits Greenhouse/Ashby/Lever APIs directly, zero LLM cost |
 | `check-liveness.mjs` | Job posting liveness checker |
