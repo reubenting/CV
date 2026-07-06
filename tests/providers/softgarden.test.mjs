@@ -55,6 +55,20 @@ try {
     fail('softgarden.parseWidget() should return [] without cards');
   }
 
+  // decodeEntities (exercised via parseWidget) — a numeric entity above
+  // 0x10FFFF is the one that actually throws RangeError out of
+  // String.fromCodePoint and must degrade to literal text instead of
+  // aborting the whole parse. A lone surrogate half (0xD800-0xDFFF) does NOT
+  // throw by itself (per spec, it's a valid — if not scalar — codepoint) but
+  // is still rejected defensively so we never emit an ill-formed string.
+  const badEntityHtml = '<html>' + sgCard('333', 'Bad&#xD800;Entity', ['Berlin']) + sgCard('444', 'Huge&#x110000;Entity', ['Berlin']) + '</html>';
+  const badRows = parseWidget(badEntityHtml, 'https://renk-group.softgarden.io/de/widgets/jobs');
+  if (badRows.length === 2 && badRows[0].title === 'Bad&#xD800;Entity' && badRows[1].title === 'Huge&#x110000;Entity') {
+    pass('softgarden.parseWidget() tolerates a lone surrogate and an out-of-range numeric entity (no RangeError crash)');
+  } else {
+    fail(`softgarden.parseWidget() should degrade a malformed entity to literal text, got: ${JSON.stringify(badRows)}`);
+  }
+
   // fetch — single widget request, jobs normalized.
   const sgCtx = { fetchText: async () => sgHtml };
   const sgJobs = await softgarden.fetch({ name: 'Renk', api: 'https://renk-group.softgarden.io/de/widgets/jobs' }, sgCtx);
