@@ -440,7 +440,11 @@ process_offer() {
   local terminal_failure_recorded=false
   while true; do
     exit_code=0
-    $AGENT_CMD "${agent_args[@]}" <<< "$combined_prompt" > "$log_file" 2>&1 || exit_code=$?
+    if [[ ${#agent_args[@]} -gt 0 ]]; then
+      $AGENT_CMD "${agent_args[@]}" <<< "$combined_prompt" > "$log_file" 2>&1 || exit_code=$?
+    else
+      $AGENT_CMD <<< "$combined_prompt" > "$log_file" 2>&1 || exit_code=$?
+    fi
 
     if [[ $exit_code -eq 0 ]]; then
       break
@@ -669,8 +673,6 @@ watch_status() {
 
 # Main
 main() {
-  check_prerequisites
-
   if [[ "$STATUS_ONLY" == "true" ]]; then
     print_status_table
     exit 0
@@ -680,6 +682,8 @@ main() {
     watch_status
     exit 0
   fi
+
+  check_prerequisites
 
   if [[ "$DRY_RUN" == "false" ]]; then
     acquire_lock
