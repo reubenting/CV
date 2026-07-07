@@ -37,7 +37,7 @@ MAX_RETRIES=2
 MIN_SCORE=0
 MODEL=""  # empty = let claude -p use the Claude Max default
 RATE_LIMIT_SLEEP=300
-AGENT_CMD="${AGENT_CMD:-claude -p --dangerously-skip-permissions --strict-mcp-config}"
+AGENT_CMD="${AGENT_CMD:-claude -p --dangerously-skip-permissions}"
 BATCH_PAUSED=false
 STATUS_ONLY=false
 WATCH_MODE=false
@@ -438,7 +438,8 @@ process_offer() {
     echo "    ❌ ERROR: Failed to build combined prompt for job $id"
     return 1
   fi
-  local -a agent_args=()
+  # --strict-mcp-config (with no --mcp-config) starts workers with no MCP
+  local -a agent_args=(--strict-mcp-config)
   if [[ -n "$MODEL" ]]; then
     agent_args+=(--model "$MODEL")
   fi
