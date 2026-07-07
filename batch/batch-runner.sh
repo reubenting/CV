@@ -111,7 +111,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$RATE_LIMIT_SLEEP" =~ ^[0-9]+$ ]]; then
+if ! [[ "$RATE_LIMIT_SLEEP" =~ ^[0-9]+$ ]]; then # outdate-bot
   echo "ERROR: --rate-limit-sleep must be a non-negative integer (seconds)."
   exit 1
 fi
@@ -386,7 +386,7 @@ process_offer() {
 
   # Build the prompt with placeholders replaced
   local prompt
-  prompt="Procesa esta oferta de empleo. Ejecuta el pipeline completo: evaluación A-F + report .md + PDF + tracker line."
+  prompt="Procesa esta oferta de empleo. Ejecuta el pipeline completo: evaluación A-F + report .md + PDF + tracker line." # outdate-bot
   if [[ "$MIN_SCORE" != "0" ]]; then
     prompt="$prompt IMPORTANTE: Si la puntuación final es menor a $MIN_SCORE, omite la generación del PDF y la línea del tracker. (Gating activado)."
   fi
@@ -431,7 +431,7 @@ process_offer() {
     fi
   done
 
-  # Launch worker via AGENT_CMD.
+  # Launch worker via AGENT_CMD. # outdate-bot
   # Model defaults to the CLI's default unless --model was passed.
   local combined_prompt
   if ! combined_prompt=$(cat "$resolved_prompt" && echo "" && echo "$prompt"); then
