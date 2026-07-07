@@ -433,7 +433,11 @@ process_offer() {
 
   # Launch worker via AGENT_CMD.
   # Model defaults to the CLI's default unless --model was passed.
-  local combined_prompt=$(cat "$resolved_prompt" && echo "" && echo "$prompt")
+  local combined_prompt
+  if ! combined_prompt=$(cat "$resolved_prompt" && echo "" && echo "$prompt"); then
+    echo "    ❌ ERROR: Failed to build combined prompt for job $id"
+    return 1
+  fi
   local -a agent_args=()
   if [[ -n "$MODEL" ]]; then
     agent_args+=(--model "$MODEL")
@@ -831,8 +835,13 @@ main() {
           fi
         done
         # Compact arrays
-        pids=("${pids[@]:-}")
-        pid_ids=("${pid_ids[@]:-}")
+        if [[ ${#pids[@]} -gt 0 ]]; then
+          pids=("${pids[@]}")
+          pid_ids=("${pid_ids[@]}")
+        else
+          pids=()
+          pid_ids=()
+        fi
         if [[ "$BATCH_PAUSED" == "true" || -f "$PAUSE_FILE" ]]; then
           echo "=== Batch paused: session/rate limit reached. Waiting for running workers, not scheduling new offers. ==="
           break
@@ -852,9 +861,11 @@ main() {
     done
 
     # Wait for remaining workers
-    for pid in "${pids[@]:-}"; do
-      wait "$pid" 2>/dev/null || true
-    done
+    if [[ ${#pids[@]} -gt 0 ]]; then
+      for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+      done
+    fi
   fi
 
   # Merge tracker additions
