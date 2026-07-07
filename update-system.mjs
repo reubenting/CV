@@ -143,6 +143,7 @@ const SYSTEM_PATHS = [
   'scan-ats-full.mjs',
   'match-star.mjs',
   'prepare-application.mjs',
+  'batch-evaluate.mjs',
   'providers/',
   'seeds/',
   'tests/',

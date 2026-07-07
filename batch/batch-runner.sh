@@ -56,7 +56,7 @@ Options:
   --resume-paused      Resume offers paused by a Claude session/rate limit
   --start-from N       Start from offer ID N (skip earlier IDs)
   --max-retries N      Max retry attempts per offer (default: 2)
-  --min-score N        Skip PDF/tracker for offers scoring below N (default: 0 = off)
+  --min-score N        Skip PDF/tracker for offers scoring below N (runs full evaluation first) (default: 0 = off)
   --rate-limit-sleep N Seconds to wait before retrying a rate-limited worker
                        (default: 300)
   --model NAME         Claude model passed to `claude -p --model` (default:
@@ -111,16 +111,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$RATE_LIMIT_SLEEP" =~ ^[0-9]+$ ]]; then # fix(gemini): min score logic restored
-  echo "ERROR: --rate-limit-sleep must be a non-negative integer (seconds)." # fix(gemini): min score logic restored
-  exit 1 # fix(gemini): min score logic restored
-fi # fix(gemini): min score logic restored
+if ! [[ "$RATE_LIMIT_SLEEP" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: --rate-limit-sleep must be a non-negative integer (seconds)."
+  exit 1
+fi
 
-if ! [[ "$MIN_SCORE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then # fix(gemini): min score logic restored
-  echo "ERROR: --min-score must be a non-negative number." # fix(gemini): min score logic restored
-  exit 1 # fix(gemini): min score logic restored
-fi # fix(gemini): min score logic restored
-# fix(gemini): limit block was deleted below
+if ! [[ "$MIN_SCORE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "ERROR: --min-score must be a non-negative number."
+  exit 1
+fi
 
 # Lock file to prevent double execution
 acquire_lock() {
@@ -436,13 +435,12 @@ process_offer() {
   if [[ -n "$MODEL" ]]; then
     agent_args+=(--model "$MODEL")
   fi
-  agent_args+=("$combined_prompt")
 
   local exit_code=0
   local terminal_failure_recorded=false
   while true; do
     exit_code=0
-    $AGENT_CMD "${agent_args[@]}" > "$log_file" 2>&1 || exit_code=$?
+    $AGENT_CMD "${agent_args[@]}" <<< "$combined_prompt" > "$log_file" 2>&1 || exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
       break
