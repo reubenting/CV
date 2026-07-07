@@ -387,6 +387,9 @@ process_offer() {
   # Build the prompt with placeholders replaced
   local prompt
   prompt="Procesa esta oferta de empleo. Ejecuta el pipeline completo: evaluación A-F + report .md + PDF + tracker line."
+  if [[ "$MIN_SCORE" != "0" ]]; then
+    prompt="$prompt IMPORTANTE: Si la puntuación final es menor a $MIN_SCORE, omite la generación del PDF y la línea del tracker. (Gating activado)."
+  fi
   prompt="$prompt URL: $url"
   prompt="$prompt JD file: $jd_file"
   prompt="$prompt Report number: $report_num"
