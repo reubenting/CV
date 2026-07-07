@@ -387,7 +387,7 @@ process_offer() {
   # Build the prompt with placeholders replaced
   local prompt
   prompt="Procesa esta oferta de empleo. Ejecuta el pipeline completo: evaluación A-F + report .md + PDF + tracker line." # outdate-bot
-  if [[ "$MIN_SCORE" != "0" ]]; then
+  if awk -v min="$MIN_SCORE" 'BEGIN{exit !(min > 0)}'; then
     prompt="$prompt IMPORTANTE: Si la puntuación final es menor a $MIN_SCORE, omite la generación del PDF y la línea del tracker. (Gating activado)."
   fi
   prompt="$prompt URL: $url"
