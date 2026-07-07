@@ -178,6 +178,82 @@ export function buildContentFilter(contentFilter) {
   };
 }
 
+// ── Visa / work-authorization filter ────────────────────────────────
+// Optional. If `visa_filter` is absent (or `enabled: false`), all jobs pass.
+// Surfaces roles that sponsor a work visa (H-1B / H-1B1 / O-1 for the US, plus
+// the generic "visa sponsorship" wording) and drops roles that explicitly
+// refuse sponsorship. Like content_filter it reads the job DESCRIPTION text, so
+// it only has signal for providers whose list API ships a description (Lever
+// today); jobs without one fall back to the require_mention rule below.
+//
+// Semantics (case-insensitive substring):
+//   - any `negative` keyword present → reject (an explicit "no sponsorship")
+//   - require_mention: false (default) → after clearing negatives, PASS —
+//     including jobs with no description. Use this to only weed out the
+//     explicit rejections while keeping everything unstated.
+//   - require_mention: true → keep only jobs whose description contains at least
+//     one `positive` keyword; a missing/empty description is rejected. Use this
+//     to surface *only* postings that actively advertise sponsorship.
+//
+// `positive` / `negative` default to a curated US-sponsorship vocabulary when
+// omitted, so `visa_filter: { enabled: true }` works out of the box; supplying
+// either list overrides that default.
+
+export const DEFAULT_VISA_POSITIVE = [
+  'visa sponsorship',
+  'sponsor a visa',
+  'sponsor visas',
+  'will sponsor',
+  'sponsorship available',
+  'sponsorship is available',
+  'eligible for sponsorship',
+  'provide sponsorship',
+  'offer sponsorship',
+  'immigration support',
+  'h-1b',
+  'h1b',
+  'h-1b1',
+  'h1b1',
+  'o-1 visa',
+];
+
+export const DEFAULT_VISA_NEGATIVE = [
+  'no visa sponsorship',
+  'no sponsorship',
+  'without sponsorship',
+  'unable to sponsor',
+  'not able to sponsor',
+  'cannot sponsor',
+  'do not sponsor',
+  'does not sponsor',
+  'not offer sponsorship',
+  'not provide sponsorship',
+  'sponsorship is not available',
+  'sponsorship not available',
+  'not offer visa sponsorship',
+];
+
+export function buildVisaFilter(visaFilter) {
+  if (!visaFilter || visaFilter.enabled === false) return () => true;
+  const positive = visaFilter.positive != null
+    ? normalizeKeywordList(visaFilter.positive)
+    : DEFAULT_VISA_POSITIVE.slice();
+  const negative = visaFilter.negative != null
+    ? normalizeKeywordList(visaFilter.negative)
+    : DEFAULT_VISA_NEGATIVE.slice();
+  const requireMention = visaFilter.require_mention === true;
+
+  return (description) => {
+    const hasText = typeof description === 'string' && description.trim() !== '';
+    if (!hasText) return !requireMention;
+    const lower = description.toLowerCase();
+    if (negative.length > 0 && negative.some(k => lower.includes(k))) return false;
+    if (!requireMention) return true;
+    if (positive.length === 0) return true;
+    return positive.some(k => lower.includes(k));
+  };
+}
+
 // ── Salary filter ───────────────────────────────────────────────────
 // Optional. If `salary_filter` is absent from portals.yml, all salaries pass.
 // Semantics:
@@ -932,6 +1008,8 @@ async function main() {
   const salaryFilter = buildSalaryFilter(config.salary_filter);
   const trustValidator = buildTrustValidator(config.trust_filter);
   const contentFilter = buildContentFilter(config.content_filter);
+  const visaFilter = buildVisaFilter(config.visa_filter);
+  const visaEnabled = Boolean(config.visa_filter) && config.visa_filter.enabled !== false;
 
   // 3. Resolve a provider for each enabled company / board
   const targets = [];
@@ -1009,6 +1087,7 @@ async function main() {
   let totalFilteredLocation = 0;
   let totalFilteredSalary = 0;
   let totalFilteredContent = 0;
+  let totalFilteredVisa = 0;
   let totalDupes = 0;
   const newOffers = [];
   const errors = [...resolveErrors];
@@ -1067,6 +1146,10 @@ async function main() {
         }
         if (!contentFilter(job.description)) {
           totalFilteredContent++;
+          continue;
+        }
+        if (!visaFilter(job.description)) {
+          totalFilteredVisa++;
           continue;
         }
         if (seenUrls.has(job.url)) {
@@ -1205,6 +1288,9 @@ async function main() {
   console.log(`Filtered by location:  ${totalFilteredLocation} removed`);
   console.log(`Filtered by salary:   ${totalFilteredSalary} removed`);
   console.log(`Filtered by content:  ${totalFilteredContent} removed`);
+  if (visaEnabled) {
+    console.log(`Filtered by visa:     ${totalFilteredVisa} removed`);
+  }
   if (Object.keys(windows).length > 0 || totalFilteredCooldown > 0) {
     console.log(`Filtered by cooldown:  ${totalFilteredCooldown} removed`);
   }
