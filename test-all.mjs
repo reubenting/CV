@@ -972,7 +972,7 @@ if (shared.includes('_profile.md')) {
 // honor rule in _shared.md, and an explicit pre-generation read in pdf.md ---
 const pdfModeCustom = readFile('modes/pdf.md');
 if (
-  shared.includes('| _custom.md | `modes/_custom.md` (if exists) |') &&
+  shared.includes('| _custom.md | `{DATA_ROOT}/modes/_custom.md` (if exists) |') &&
   shared.includes('Read _custom.md (if it exists) AFTER this file and honor its house rules in every mode') &&
   shared.includes('does not expire between sessions or between items in a batch') &&
   pdfModeCustom.includes('read `modes/_custom.md` (if it exists) and apply its formatting/content house rules')
@@ -1507,10 +1507,12 @@ try {
   fail(`scan.mjs formatPipelineOffer import failed: ${err.message}`);
 }
 
+let fixtureRoot = null;
+let originalCwd = process.cwd();
 try {
-  const { appendToPipeline } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href);
-  const fixtureRoot = mkdtempSync(join(tmpdir(), 'career-ops-missing-pipeline-'));
-  const originalCwd = process.cwd();
+  fixtureRoot = mkdtempSync(join(tmpdir(), 'career-ops-missing-pipeline-'));
+  process.env.CAREER_OPS_ROOT = fixtureRoot;
+  const { appendToPipeline } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href + '?cachebust=' + Date.now());
   try {
     mkdirSync(join(fixtureRoot, 'data'), { recursive: true });
     process.chdir(fixtureRoot);
@@ -1527,10 +1529,14 @@ try {
     }
   } finally {
     process.chdir(originalCwd);
-    rmSync(fixtureRoot, { recursive: true, force: true });
   }
 } catch (err) {
   fail(`scan.mjs fresh-install pipeline test crashed: ${err.message}`);
+} finally {
+  delete process.env.CAREER_OPS_ROOT;
+  if (fixtureRoot) {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 }
 
 const scanMode = fileExists('modes/scan.md') ? readFile('modes/scan.md') : '';
@@ -6372,6 +6378,163 @@ try {
   }
 } catch (e) {
   fail(`offer-prep posture freeze crashed: ${e.message}`);
+}
+
+// ── 20. PATH RESOLUTION LAYER AND OVERRIDES ───────────────────
+
+console.log('\n20. Path resolution layer and overrides');
+
+try {
+  const { getCareerOpsRoot } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href);
+
+  // 1. Unset env vars should resolve to codebase root (ROOT)
+  const originalRoot = process.env.CAREER_OPS_ROOT;
+  const originalDataDir = process.env.CAREER_OPS_DATA_DIR;
+  delete process.env.CAREER_OPS_ROOT;
+  delete process.env.CAREER_OPS_DATA_DIR;
+
+  try {
+    const defaultRoot = getCareerOpsRoot();
+    if (defaultRoot === ROOT) {
+      pass('getCareerOpsRoot() defaults to codebase root when environment variables are unset');
+    } else {
+      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${ROOT}`);
+    }
+
+    // 2. CAREER_OPS_ROOT should override the resolved path
+    const testOverridePath = join(ROOT, 'test-override-path');
+    process.env.CAREER_OPS_ROOT = testOverridePath;
+    const overriddenRoot = getCareerOpsRoot();
+    if (overriddenRoot === testOverridePath) {
+      pass('getCareerOpsRoot() respects process.env.CAREER_OPS_ROOT override');
+    } else {
+      fail(`getCareerOpsRoot() returned ${overriddenRoot}, expected ${testOverridePath}`);
+    }
+    delete process.env.CAREER_OPS_ROOT;
+
+    // 3. CAREER_OPS_DATA_DIR should override the resolved path
+    process.env.CAREER_OPS_DATA_DIR = testOverridePath;
+    const overriddenDataDirRoot = getCareerOpsRoot();
+    if (overriddenDataDirRoot === testOverridePath) {
+      pass('getCareerOpsRoot() respects process.env.CAREER_OPS_DATA_DIR override');
+    } else {
+      fail(`getCareerOpsRoot() returned ${overriddenDataDirRoot}, expected ${testOverridePath}`);
+    }
+  } finally {
+    // Restore original env vars
+    if (originalRoot) process.env.CAREER_OPS_ROOT = originalRoot;
+    else delete process.env.CAREER_OPS_ROOT;
+
+    if (originalDataDir) process.env.CAREER_OPS_DATA_DIR = originalDataDir;
+    else delete process.env.CAREER_OPS_DATA_DIR;
+  }
+
+  // 4. Test doctor.mjs respects target directory or target override when CAREER_OPS_ROOT is set
+  const tempTarget = mkdtempSync(join(ROOT, 'co-temp-target-'));
+  try {
+    process.env.CAREER_OPS_ROOT = tempTarget;
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
+      pass('doctor.mjs respects CAREER_OPS_ROOT default root check');
+    } else {
+      fail(`doctor.mjs with CAREER_OPS_ROOT override failed: ${JSON.stringify(r)}`);
+    }
+  } finally {
+    delete process.env.CAREER_OPS_ROOT;
+  }
+
+  // 4b. Test doctor.mjs respects CAREER_OPS_DATA_DIR override
+  try {
+    process.env.CAREER_OPS_DATA_DIR = tempTarget;
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
+      pass('doctor.mjs respects CAREER_OPS_DATA_DIR override check');
+    } else {
+      fail(`doctor.mjs with CAREER_OPS_DATA_DIR override failed: ${JSON.stringify(r)}`);
+    }
+  } finally {
+    delete process.env.CAREER_OPS_DATA_DIR;
+    rmSync(tempTarget, { recursive: true, force: true });
+  }
+
+  // 5. Test normalize-statuses respects CAREER_OPS_ROOT and does not touch main repo tracker
+  const tempRoot = mkdtempSync(join(ROOT, 'co-temp-root-'));
+  const tempTrackerDir = join(tempRoot, 'data');
+  mkdirSync(tempTrackerDir, { recursive: true });
+  const tempTracker = join(tempTrackerDir, 'applications.md');
+  const dummyContent = `
+# Applications
+
+| # | Date | Company | Role | Score | Status | PDF | Report | Notes |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 2026-07-01 | TestCo | Engineer | 4.0 | **Applied** | ❌ | - | - |
+`;
+  writeFileSync(tempTracker, dummyContent, 'utf-8');
+
+
+  try {
+    process.env.CAREER_OPS_ROOT = tempRoot;
+    run(NODE, ['normalize-statuses.mjs']);
+    const updated = readFileSync(tempTracker, 'utf-8');
+    if (updated.includes('| Applied |') && !updated.includes('**Applied**')) {
+      pass('normalize-statuses.mjs respects CAREER_OPS_ROOT and modifies the correct tracker file');
+    } else {
+      fail(`normalize-statuses.mjs did not modify target tracker correctly, content: ${updated}`);
+    }
+
+  } finally {
+    delete process.env.CAREER_OPS_ROOT;
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+
+  // 6. Test .career-ops-data marker file resolution
+  const tempMarkerRoot = mkdtempSync(join(ROOT, 'co-temp-marker-'));
+  const markerFile = join(ROOT, '.career-ops-data');
+  const originalRootEnv = process.env.CAREER_OPS_ROOT;
+  const originalDataDirEnv = process.env.CAREER_OPS_DATA_DIR;
+  delete process.env.CAREER_OPS_ROOT;
+  delete process.env.CAREER_OPS_DATA_DIR;
+
+  const originalMarkerExists = existsSync(markerFile);
+  let originalMarkerContent = '';
+  if (originalMarkerExists) {
+    try { originalMarkerContent = readFileSync(markerFile, 'utf-8'); } catch {}
+  }
+
+  try {
+    writeFileSync(markerFile, tempMarkerRoot, 'utf-8');
+    const { getCareerOpsRoot: getRootWithMarker } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href + '?cachebust=' + Date.now());
+    const resolved = getRootWithMarker();
+    if (resolved === tempMarkerRoot) {
+      pass('getCareerOpsRoot() respects .career-ops-data marker file');
+    } else {
+      fail(`getCareerOpsRoot() with marker returned ${resolved}, expected ${tempMarkerRoot}`);
+    }
+  } finally {
+    try {
+      if (originalMarkerExists) {
+        writeFileSync(markerFile, originalMarkerContent, 'utf-8');
+      } else {
+        unlinkSync(markerFile);
+      }
+    } catch {}
+    if (originalRootEnv) process.env.CAREER_OPS_ROOT = originalRootEnv;
+    if (originalDataDirEnv) process.env.CAREER_OPS_DATA_DIR = originalDataDirEnv;
+    rmSync(tempMarkerRoot, { recursive: true, force: true });
+  }
+
+  // 7. Test resolveTrackerPathForWrite
+  const { resolveTrackerPathForWrite: getWriteTracker } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href + '?cachebust=' + Date.now());
+  const expectedWritePath = join(ROOT, 'data/applications.md');
+  const actualWritePath = getWriteTracker(ROOT);
+  if (actualWritePath === expectedWritePath) {
+    pass('resolveTrackerPathForWrite() returns the canonical data/applications.md path deterministically');
+  } else {
+    fail(`resolveTrackerPathForWrite() returned ${actualWritePath}, expected ${expectedWritePath}`);
+  }
+
+} catch (e) {
+  fail(`Path resolution layer test crashed: ${e.message}`);
 }
 
 console.log('\n56. Fingerprint core — JD cross-listing detection (#1597)');

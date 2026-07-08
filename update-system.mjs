@@ -137,6 +137,8 @@ const SYSTEM_PATHS = [
   'normalize-statuses.mjs',
   'cv-sync-check.mjs',
   'update-system.mjs',
+  'path-resolver.mjs',
+
   'reserve-report-num.mjs',
   'scan.mjs',
   'classify-tier.mjs',
