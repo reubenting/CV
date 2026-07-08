@@ -12,7 +12,6 @@ import (
 
 	"github.com/santifer/career-ops/dashboard/internal/model"
 )
-
 var (
 	reReportLink     = regexp.MustCompile(`\[(\d+)\]\(([^)]+)\)`)
 	reScoreValue     = regexp.MustCompile(`(\d+\.?\d*)/5`)
@@ -568,6 +567,55 @@ func LoadReportSummary(careerOpsPath, reportPath string) (archetype, tldr, remot
 	return
 }
 
+// LoadReportDiscardReasons parses the `discard_reasons` YAML list from a
+// report's ## Machine Summary fence and returns the predicted skip/discard
+// reasons so the dashboard picker can pre-populate its dropdown.
+// Returns nil (not an empty slice) when the field is absent or empty so
+// callers can distinguish "no report" from "report with no predicted reasons".
+func LoadReportDiscardReasons(careerOpsPath, reportPath string) []string {
+	if reportPath == "" {
+		return nil
+	}
+	fullPath := filepath.Join(careerOpsPath, reportPath)
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil
+	}
+
+	// Scope the search to the ## Machine Summary code fence to avoid false
+	// positives from other YAML blocks in the report.
+	var searchIn string
+	if fenceIdx := strings.Index(string(content), "## Machine Summary"); fenceIdx >= 0 {
+		block := string(content)[fenceIdx:]
+		// Grab the first fenced block after the heading.
+		if start := strings.Index(block, "```"); start >= 0 {
+			if end := strings.Index(block[start+3:], "```"); end >= 0 {
+				searchIn = block[start+3 : start+3+end]
+			}
+		}
+	}
+	if searchIn == "" {
+		return nil
+	}
+
+	m := reDiscardReasons.FindStringSubmatch(searchIn)
+	if m == nil {
+		return nil
+	}
+
+	var reasons []string
+	for _, line := range strings.Split(m[1], "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.Trim(line, `"`)
+		line = strings.TrimSpace(line)
+		if line != "" && line != "[]" {
+			reasons = append(reasons, line)
+		}
+	}
+	return reasons
+}
+
 // splitTrackerRow splits a tracker table line into trimmed cell values, using
 // the same delimiter logic as ParseApplications: a mixed "| " + tab-separated
 // body, or a pure pipe-delimited row. Field 0 is the first real column (num), so
@@ -660,6 +708,109 @@ func UpdateApplicationStatus(careerOpsPath string, app model.CareerApplication, 
 	return UpdateApplicationStatusAndNotes(careerOpsPath, app, newStatus, "")
 }
 
+// UpdateApplicationStatusAndNotes atomically updates both the Status cell and
+// the Notes cell for an application row. It is used by the discard reason
+// picker (Issue 1380) to commit `DISCARD: <reason>` alongside the new status
+// in a single file write, preventing a second partial update from leaving the
+// tracker in a half-written state.
+//
+// notesAppend is appended (with a space separator if notes are non-empty) to
+// whatever the Notes cell already contains. Pass an empty string to leave
+// notes unchanged.
+func UpdateApplicationStatusAndNotes(careerOpsPath string, app model.CareerApplication, newStatus, notesAppend string) error {
+	filePath := filepath.Join(careerOpsPath, "applications.md")
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		filePath = filepath.Join(careerOpsPath, "data", "applications.md")
+		content, err = os.ReadFile(filePath)
+		if err != nil {
+			return err
+		}
+	}
+
+	lines := strings.Split(string(content), "\n")
+	cols := resolveTrackerColumns(lines)
+	statusIdx, statusOk := cols["status"]
+	if !statusOk {
+		return fmt.Errorf("status column not found in tracker")
+	}
+	notesIdx, notesOk := cols["notes"]
+	if notesAppend != "" && !notesOk {
+		return fmt.Errorf("notes column not found in tracker, cannot append notes")
+	}
+
+
+	found := false
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "|") {
+			continue
+		}
+		if app.ReportNumber == "" || !strings.Contains(line, fmt.Sprintf("[%s]", app.ReportNumber)) {
+			continue
+		}
+		// Update status
+		updated, ok := replaceStatusInLine(line, app.Status, newStatus, statusIdx)
+		if !ok {
+			return fmt.Errorf("failed to replace status: status cell '%s' not matched in row", app.Status)
+		}
+		// Optionally append to notes
+		if notesAppend != "" {
+			var ok bool
+			updated, ok = appendNotesInLine(updated, notesAppend, notesIdx)
+			if !ok {
+				return fmt.Errorf("failed to append notes: notes column index %d out of bounds", notesIdx)
+			}
+		}
+		lines[i] = updated
+		found = true
+		break
+	}
+
+	if !found {
+		return fmt.Errorf("application not found: report %s", app.ReportNumber)
+	}
+
+	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// appendNotesInLine appends text to the Notes cell of a tracker row without
+// disturbing any other cell. notesField is the 0-based column index returned
+// by resolveTrackerColumns.
+func appendNotesInLine(line, text string, notesField int) (string, bool) {
+	if notesField < 0 {
+		return line, false
+	}
+	if strings.Contains(line, "\t") {
+		prefix, body, found := strings.Cut(line, "|")
+		if !found {
+			return line, false
+		}
+		cells := strings.Split(body, "\t")
+		if notesField < len(cells) {
+			old := strings.TrimSpace(cells[notesField])
+			if old == "" {
+				cells[notesField] = " " + text + " "
+			} else {
+				cells[notesField] = " " + old + " " + text + " "
+			}
+			return prefix + "|" + strings.Join(cells, "\t"), true
+		}
+		return line, false
+	}
+
+	segments := strings.Split(line, "|")
+	if notesField+1 < len(segments) {
+		old := strings.TrimSpace(segments[notesField+1])
+		if old == "" {
+			segments[notesField+1] = " " + text + " "
+		} else {
+			segments[notesField+1] = " " + old + " " + text + " "
+		}
+		return strings.Join(segments, "|"), true
+	}
+	return line, false
+}
+
 // replaceStatusInLine rewrites only the Status cell of a tracker row, leaving
 // every other cell untouched. The previous implementation used
 // strings.Replace(line, oldStatus, …, 1), which replaces the first occurrence of
@@ -672,7 +823,7 @@ func UpdateApplicationStatus(careerOpsPath string, app model.CareerApplication, 
 // statusField is the Status column index in splitTrackerRow field space (5 in
 // the legacy layout), resolved from the table header so a customized layout
 // (e.g. an inserted Location column) targets the right cell.
-func replaceStatusInLine(line, oldStatus, newStatus string, statusField int) string {
+func replaceStatusInLine(line, oldStatus, newStatus string, statusField int) (string, bool) {
 	want := strings.TrimSpace(oldStatus)
 
 	// Mixed "| " + tab-separated format (mirrors ParseApplications). The body is
@@ -680,14 +831,14 @@ func replaceStatusInLine(line, oldStatus, newStatus string, statusField int) str
 	if strings.Contains(line, "\t") {
 		prefix, body, found := strings.Cut(line, "|")
 		if !found {
-			return line
+			return line, false
 		}
 		cells := strings.Split(body, "\t")
 		if idx := statusCellIndex(cells, statusField, want); idx >= 0 {
 			cells[idx] = spliceCellValue(cells[idx], newStatus)
-			return prefix + "|" + strings.Join(cells, "\t")
+			return prefix + "|" + strings.Join(cells, "\t"), true
 		}
-		return line
+		return line, false
 	}
 
 	// Pure pipe format. strings.Split keeps the segments between pipes; content
@@ -696,9 +847,9 @@ func replaceStatusInLine(line, oldStatus, newStatus string, statusField int) str
 	segments := strings.Split(line, "|")
 	if idx := statusCellIndex(segments, statusField+1, want); idx >= 0 {
 		segments[idx] = spliceCellValue(segments[idx], newStatus)
-		return strings.Join(segments, "|")
+		return strings.Join(segments, "|"), true
 	}
-	return line
+	return line, false
 }
 
 // statusCellIndex returns the index of the Status cell. It prefers the canonical
