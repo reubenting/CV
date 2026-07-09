@@ -117,6 +117,7 @@ const SYSTEM_PATHS = [
   'build-dashboard.mjs',
   'generate-pdf.mjs',
   'generate-latex.mjs',
+  'img-to-pdf.mjs',
   'archive-posting.mjs',
   'application-answers.mjs',
   'generate-cover-letter.mjs',
