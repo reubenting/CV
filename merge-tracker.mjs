@@ -477,6 +477,29 @@ for (const line of appLines) {
   }
 }
 
+// Full set of numbers already on the tracker (#1704). This is a separate,
+// deliberately narrower pass than the existingApps loop above: it reads only
+// the numeric # cell and skips a row via the same NaN check verify-pipeline.mjs
+// uses, instead of the `.includes('---') / .includes('Empresa')` heuristic —
+// so a company or role field that happens to CONTAIN "Empresa" or "---" (e.g.
+// a Spanish-market company name, or an em-dash-style separator in a title)
+// can't hide that row's number the way it can hide the row from existingApps
+// (which stays as-is; it drives duplicate detection, not numbering). Used
+// below so a new entry's number is checked against every number actually on
+// the tracker, not just the largest one the existingApps loop happened to see.
+const usedNumbers = new Set();
+const MAX_COL_IDX = Math.max(...Object.values(COLMAP));
+for (const line of appLines) {
+  if (!line.startsWith('|')) continue;
+  const parts = line.split('|').map(s => s.trim());
+  if (parts.length <= MAX_COL_IDX) continue;
+  const n = parseInt(parts[COLMAP.num]);
+  if (!isNaN(n) && n !== 0) {
+    usedNumbers.add(n);
+    if (n > maxNum) maxNum = n;
+  }
+}
+
 console.log(`📊 Existing: ${existingApps.length} entries, max #${maxNum}`);
 
 // Read tracker additions
@@ -610,9 +633,37 @@ for (const file of tsvFiles) {
       skipped++;
     }
   } else {
-    // New entry — use the number from the TSV
-    const entryNum = addition.num > maxNum ? addition.num : ++maxNum;
-    if (addition.num > maxNum) maxNum = addition.num;
+    // New entry — keep the TSV's own reserved number whenever it is free.
+    // Report numbers come from reserve-report-num.mjs (counts off reports/),
+    // while maxNum comes from the tracker's own rows — two independent
+    // counters. A reserved number <= maxNum is therefore the COMMON case,
+    // not an anomaly, and silently replacing it with ++maxNum permanently
+    // diverges the tracker row # from the number embedded in the report
+    // file (filename + Machine Summary), which then makes
+    // `set-status.mjs <report#>` edit the wrong row (#1733, field report
+    // in #1704). So: trust addition.num as long as it's a valid positive
+    // integer AND not already claimed by any tracker row or by an earlier
+    // addition in this same run (usedNumbers covers both, per #1704).
+    // Only fall back to fresh max-based assignment when the number is
+    // genuinely taken — and warn loudly, because from that point the row #
+    // no longer matches the report file's number.
+    const reservedNum = Number.isInteger(addition.num) && addition.num > 0
+      ? addition.num : null;
+    let entryNum;
+    if (reservedNum !== null && !usedNumbers.has(reservedNum)) {
+      entryNum = reservedNum;
+    } else {
+      entryNum = maxNum + 1;
+      while (usedNumbers.has(entryNum)) entryNum++;
+      if (reservedNum !== null) {
+        console.warn(`⚠️  Reserved #${reservedNum} already used by another tracker row — assigned #${entryNum} to ${addition.company} — ${addition.role} instead. Tracker row # no longer matches the report file's number (reports/${String(reservedNum).padStart(3, '0')}-...); fix the report link/number manually if needed.`);
+      }
+    }
+    usedNumbers.add(entryNum);
+    // maxNum must never go backwards: keeping a low reserved number (e.g.
+    // #415 while max is #417) must not make a later number-less addition
+    // land on #416 twice.
+    if (entryNum > maxNum) maxNum = entryNum;
 
     const newLine = buildRow({
       num: entryNum, date: addition.date, company: addition.company, role: addition.role,

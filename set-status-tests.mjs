@@ -86,6 +86,18 @@ const TRACKER_10 = `# Applications Tracker
 | 1 | 2026-06-01 | Initech | AI Engineer | Remote | 4.5/5 | Evaluated | ✅ | [1](../reports/001-initech-2026-06-01.md) | — |
 `;
 
+// Two unrelated rows share tracker number 5 (the #1704 bug: merge-tracker.mjs
+// once trusted a stale TSV number as-is when it was numerically ahead of that
+// run's max, even though the number was already used by an unrelated row
+// merged in a separate, earlier invocation).
+const TRACKER_DUP_NUM = `# Applications Tracker
+
+| # | Date | Company | Role | Score | Status | PDF | Report | Notes |
+|---|------|---------|------|-------|--------|-----|--------|-------|
+| 5 | 2026-05-29 | University of Alberta | Curriculum Coordinator | 3.8/5 | Evaluated | ❌ | — | — |
+| 5 | 2026-06-03 | Esri Canada | Manager Talent and Organizational Development | 4.1/5 | Evaluated | ❌ | — | — |
+`;
+
 // ── 1. Update by report number ──────────────────────────────────
 {
   const sb = makeSandbox(TRACKER_9);
@@ -175,6 +187,101 @@ const TRACKER_10 = `# Applications Tracker
     fail(`ambiguous --role: code=${r2.code}\n${r2.stdout}${r2.stderr}`);
   }
   rmSync(sb.dir, { recursive: true, force: true });
+}
+
+// ── 6b. Duplicate tracker #: bare number refuses to guess (#1704) ─
+{
+  const sb = makeSandbox(TRACKER_DUP_NUM);
+  const before = readTracker(sb);
+  const r = runSetStatus(['5', 'Rejected'], sb);
+  if (r.code === 3 && readTracker(sb) === before
+      && r.stderr.includes('University of Alberta') && r.stderr.includes('Esri Canada')) {
+    pass('dup-num: bare #5 matching 2 rows exits 3, tracker untouched, both companies listed');
+  } else {
+    fail(`dup-num: code=${r.code} (want 3)\n${r.stdout}${r.stderr}`);
+  }
+  // --role disambiguates exactly like the company-selector ambiguous path.
+  const r2 = runSetStatus(['5', 'Rejected', '--role', 'Manager Talent and Organizational Development'], sb);
+  if (r2.code === 0 && /\| 5 \| 2026-06-03 \| Esri Canada \|.*\| Rejected \|/.test(readTracker(sb))) {
+    pass('dup-num: --role disambiguates to the right row');
+  } else {
+    fail(`dup-num --role: code=${r2.code}\n${r2.stdout}${r2.stderr}`);
+  }
+  // The OTHER row (University of Alberta) must stay untouched by the --role
+  // disambiguated write above.
+  if (readTracker(sb).includes('| 5 | 2026-05-29 | University of Alberta | Curriculum Coordinator | 3.8/5 | Evaluated |')) {
+    pass('dup-num: unrelated row with the same # untouched after disambiguation');
+  } else {
+    fail(`dup-num: unrelated row was modified\n${readTracker(sb)}`);
+  }
+  rmSync(sb.dir, { recursive: true, force: true });
+}
+
+// ── 6c. Duplicate tracker # + --json: structured candidates ─────
+{
+  const sb = makeSandbox(TRACKER_DUP_NUM);
+  const r = runSetStatus(['5', 'Rejected', '--json'], sb);
+  let parsed = null;
+  try { parsed = JSON.parse(r.stdout || r.stderr); } catch {}
+  if (r.code === 3 && parsed && parsed.code === 'ambiguous' && Array.isArray(parsed.candidates)
+      && parsed.candidates.length === 2) {
+    pass('dup-num json: structured ambiguous error with 2 candidates');
+  } else {
+    fail(`dup-num json: code=${r.code}\n${r.stdout}${r.stderr}`);
+  }
+  rmSync(sb.dir, { recursive: true, force: true });
+}
+
+// ── 6d. Report-link mismatch: numeric selector blocked without --force (#1733) ─
+// merge-tracker.mjs once silently renumbered additions whose reserved report
+// number was <= the tracker max, leaving rows whose # disagrees with the
+// number embedded in their own Report link. Row #5 below "looks" fine to a
+// bare-number selector — exactly one match — but its Report column points to
+// reports/415-..., so `set-status 5` may well be targeting the wrong row.
+const TRACKER_DRIFTED = `# Applications Tracker
+
+| # | Date | Company | Role | Score | Status | PDF | Report | Notes |
+|---|------|---------|------|-------|--------|-----|--------|-------|
+| 5 | 2026-07-09 | HPE | CloudOps Engineer | 4.1/5 | Evaluated | ❌ | [415](../reports/415-hpe-cloudops-2026-07-09.md) | drifted row |
+`;
+{
+  const sb = makeSandbox(TRACKER_DRIFTED);
+  const before = readTracker(sb);
+  const r = runSetStatus(['5', 'Applied'], sb);
+  if (r.code === 3 && readTracker(sb) === before
+      && r.stderr.includes('reports/415-') && r.stderr.includes('--force')) {
+    pass('report-link mismatch: #5 vs reports/415-... blocked (exit 3), tracker untouched, --force suggested');
+  } else {
+    fail(`report-link mismatch: code=${r.code} (want 3)\n${r.stdout}${r.stderr}`);
+  }
+  // --json carries the structured drift payload.
+  const rj = runSetStatus(['5', 'Applied', '--json'], sb);
+  let parsedDrift = null;
+  try { parsedDrift = JSON.parse(rj.stdout || rj.stderr); } catch {}
+  if (rj.code === 3 && parsedDrift && parsedDrift.code === 'report-link-mismatch'
+      && parsedDrift.rowNum === 5 && parsedDrift.linkedReportNum === 415) {
+    pass('report-link mismatch json: structured error with rowNum/linkedReportNum');
+  } else {
+    fail(`report-link mismatch json: code=${rj.code}\n${rj.stdout}${rj.stderr}`);
+  }
+  // --force overrides the guard and writes.
+  const rf = runSetStatus(['5', 'Applied', '--force'], sb);
+  if (rf.code === 0 && /\| 5 \| 2026-07-09 \| HPE \| CloudOps Engineer \| 4.1\/5 \| Applied \|/.test(readTracker(sb))) {
+    pass('report-link mismatch: --force writes anyway');
+  } else {
+    fail(`report-link mismatch --force: code=${rf.code}\n${rf.stdout}${rf.stderr}`);
+  }
+  // Company selector is unaffected by the drift guard (no number to disagree
+  // with) — reset the row and update by company.
+  const sb2 = makeSandbox(TRACKER_DRIFTED);
+  const rc = runSetStatus(['HPE', 'Rejected'], sb2);
+  if (rc.code === 0 && readTracker(sb2).includes('| Rejected |')) {
+    pass('report-link mismatch: company selector bypasses the drift guard');
+  } else {
+    fail(`report-link mismatch company selector: code=${rc.code}\n${rc.stdout}${rc.stderr}`);
+  }
+  rmSync(sb.dir, { recursive: true, force: true });
+  rmSync(sb2.dir, { recursive: true, force: true });
 }
 
 // ── 7. Note append: idempotent, separator, pipe-sanitized ───────
