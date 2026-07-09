@@ -940,6 +940,63 @@ try {
   fail(`update-system timeout helper test crashed: ${e.message}`);
 }
 
+// ── 7d. OUTPUT LANGUAGE CONTRACT ─────────────────────────────────
+
+console.log('\n7d. Output language contract');
+
+const profileExample = readFile('config/profile.example.yml');
+const outputLanguageAgentsDoc = readFile('AGENTS.md');
+const outputLanguageClaudeDoc = readFile('CLAUDE.md');
+const careerOpsSkill = readFile('.agents/skills/career-ops/SKILL.md');
+const batchPrompt = readFile('batch/batch-prompt.md');
+
+if (/language:\s*\n(?:\s*#.*\n)*\s*output:\s*["']?en["']?/.test(profileExample)) {
+  pass('profile.example.yml documents language.output default');
+} else {
+  fail('profile.example.yml is missing language.output default');
+}
+
+if (
+  /language\.output/.test(outputLanguageAgentsDoc) &&
+  /human-facing output/i.test(outputLanguageAgentsDoc) &&
+  /modes_dir/.test(outputLanguageAgentsDoc)
+) {
+  pass('AGENTS.md documents output language separately from market modes');
+} else {
+  fail('AGENTS.md does not document the language.output vs modes_dir contract');
+}
+
+const marketModeDocs = [
+  ['AGENTS.md', outputLanguageAgentsDoc],
+  ['CLAUDE.md', outputLanguageClaudeDoc],
+];
+
+for (const [docName, docText] of marketModeDocs) {
+  if (/asks for (German|French|Arabic|Japanese|Turkish) output/i.test(docText)) {
+    fail(`${docName} treats output-language requests as market-mode selection`);
+  } else {
+    pass(`${docName} keeps output language separate from market-mode selection`);
+  }
+}
+
+if (/language\.output/.test(careerOpsSkill) && /human-facing output/i.test(careerOpsSkill)) {
+  pass('career-ops skill injects the output language rule');
+} else {
+  fail('career-ops skill does not inject the output language rule');
+}
+
+if (/Language Rule/i.test(batchPrompt) && /language\.output/.test(batchPrompt) && /write all human-facing output/i.test(batchPrompt)) {
+  pass('batch prompt honors language.output for worker prose');
+} else {
+  fail('batch prompt does not honor language.output for worker prose');
+}
+
+if (/Canonical base language:\s*English\./.test(batchPrompt)) {
+  pass('batch prompt uses an English canonical base');
+} else {
+  fail('batch prompt canonical base is not English');
+}
+
 // ── 8. MODE FILE INTEGRITY ──────────────────────────────────────
 
 console.log('\n8. Mode file integrity');
