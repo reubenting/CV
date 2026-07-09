@@ -6730,6 +6730,462 @@ try {
   fail(`test layout guard: ${e.message}`);
 }
 
+console.log('\n63. Provider — Wellfound (RSS feed parser)');
+try {
+  const {
+    default: wellfound,
+    parseWellfoundFeed,
+    splitWellfoundTitle,
+  } = await import(pathToFileURL(join(ROOT, 'providers/wellfound.mjs')).href);
+
+  // id
+  if (wellfound.id === 'wellfound') {
+    pass('wellfound.id is "wellfound"');
+  } else {
+    fail(`wellfound.id is "${wellfound.id}"`);
+  }
+
+  // detect() — explicit provider config
+  if (wellfound.detect({ provider: 'wellfound' })?.url === 'https://wellfound.com/jobs.rss') {
+    pass('wellfound.detect() claims explicit provider config');
+  } else {
+    fail('wellfound.detect() did not return expected URL');
+  }
+
+  // detect() — ignores other providers
+  if (wellfound.detect({ provider: 'other' }) === null && wellfound.detect({}) === null) {
+    pass('wellfound.detect() ignores other provider ids');
+  } else {
+    fail('wellfound.detect() should return null for non-wellfound entries');
+  }
+
+  // splitWellfoundTitle — canonical "Role at Company"
+  {
+    const { role, company } = splitWellfoundTitle('Senior Software Engineer at Stripe');
+    if (role === 'Senior Software Engineer' && company === 'Stripe') {
+      pass('splitWellfoundTitle splits canonical "Role at Company"');
+    } else {
+      fail(`splitWellfoundTitle canonical: role=${JSON.stringify(role)} company=${JSON.stringify(company)}`);
+    }
+  }
+
+  // splitWellfoundTitle — ambiguous title with multiple " at "
+  {
+    const { role, company } = splitWellfoundTitle('Staff Engineer at Scale at Acme Corp');
+    if (role === 'Staff Engineer at Scale' && company === 'Acme Corp') {
+      pass('splitWellfoundTitle splits on the LAST " at " for ambiguous titles');
+    } else {
+      fail(`splitWellfoundTitle last-at: role=${JSON.stringify(role)} company=${JSON.stringify(company)}`);
+    }
+  }
+
+  // splitWellfoundTitle — no " at " → full title, empty company
+  {
+    const { role, company } = splitWellfoundTitle('Just a plain title');
+    if (role === 'Just a plain title' && company === '') {
+      pass('splitWellfoundTitle returns empty company when no " at " found');
+    } else {
+      fail(`splitWellfoundTitle no-at: role=${JSON.stringify(role)} company=${JSON.stringify(company)}`);
+    }
+  }
+
+  // parseWellfoundFeed — realistic RSS sample
+  const SAMPLE_RSS = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Wellfound Jobs</title>
+    <item>
+      <title>Senior Backend Engineer at Stripe</title>
+      <link>https://wellfound.com/jobs/123456-senior-backend-engineer</link>
+      <author>Stripe</author>
+      <pubDate>Mon, 02 Jun 2025 10:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Staff Engineer at Scale at Acme &amp; Co</title>
+      <link>https://wellfound.com/jobs/234567-staff-engineer</link>
+      <author>Acme &amp; Co</author>
+      <pubDate>Mon, 02 Jun 2025 11:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Product Designer</title>
+      <link>https://wellfound.com/jobs/345678-product-designer</link>
+      <author>Beta Labs</author>
+      <pubDate>Mon, 02 Jun 2025 12:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Ghost Role</title>
+      <link>https://evil.example.com/jobs/999</link>
+      <author>Bad Actor</author>
+      <pubDate>Mon, 02 Jun 2025 13:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <link>https://wellfound.com/jobs/000000-no-title</link>
+      <author>Orphan</author>
+    </item>
+  </channel>
+</rss>`;
+
+  const jobs = parseWellfoundFeed(SAMPLE_RSS, 'Wellfound');
+
+  // count — off-domain and no-title items dropped
+  if (jobs.length === 3) {
+    pass('parseWellfoundFeed returns 3 jobs (off-domain URL and no-title item dropped)');
+  } else {
+    fail(`parseWellfoundFeed count: ${jobs.length} (expected 3)`);
+  }
+
+  // job 0 — canonical split
+  if (jobs[0]?.title === 'Senior Backend Engineer' && jobs[0]?.company === 'Stripe') {
+    pass('parseWellfoundFeed splits "Role at Company" title correctly');
+  } else {
+    fail(`parseWellfoundFeed job 0: ${JSON.stringify(jobs[0])}`);
+  }
+
+  if (jobs[0]?.url === 'https://wellfound.com/jobs/123456-senior-backend-engineer') {
+    pass('parseWellfoundFeed maps job URL correctly');
+  } else {
+    fail(`parseWellfoundFeed url: ${JSON.stringify(jobs[0]?.url)}`);
+  }
+
+  if (Number.isInteger(jobs[0]?.postedAt)) {
+    pass('parseWellfoundFeed parses pubDate to postedAt epoch ms');
+  } else {
+    fail(`parseWellfoundFeed postedAt: ${JSON.stringify(jobs[0]?.postedAt)}`);
+  }
+
+  if (jobs[0]?.location === '') {
+    pass('parseWellfoundFeed leaves location empty (not in feed)');
+  } else {
+    fail(`parseWellfoundFeed location should be empty, got: ${JSON.stringify(jobs[0]?.location)}`);
+  }
+
+  // job 1 — last-" at "-split + HTML entity decode in company
+  if (jobs[1]?.title === 'Staff Engineer at Scale' && jobs[1]?.company === 'Acme & Co') {
+    pass('parseWellfoundFeed handles last-" at " split and decodes &amp; in company');
+  } else {
+    fail(`parseWellfoundFeed job 1: title=${JSON.stringify(jobs[1]?.title)} company=${JSON.stringify(jobs[1]?.company)}`);
+  }
+
+  // job 2 — no " at " in title → falls back to <author>
+  if (jobs[2]?.title === 'Product Designer' && jobs[2]?.company === 'Beta Labs') {
+    pass('parseWellfoundFeed falls back to <author> when title has no " at "');
+  } else {
+    fail(`parseWellfoundFeed job 2 fallback: ${JSON.stringify(jobs[2])}`);
+  }
+
+  // CDATA title
+  const CDATA_RSS = `<rss><channel>
+    <item>
+      <title><![CDATA[Engineering Manager at CDATA Corp]]></title>
+      <link>https://wellfound.com/jobs/cdata-999</link>
+      <pubDate>Mon, 02 Jun 2025 14:00:00 +0000</pubDate>
+    </item>
+  </channel></rss>`;
+  const cdataJobs = parseWellfoundFeed(CDATA_RSS, 'Wellfound');
+  if (cdataJobs[0]?.title === 'Engineering Manager' && cdataJobs[0]?.company === 'CDATA Corp') {
+    pass('parseWellfoundFeed unwraps CDATA sections in title');
+  } else {
+    fail(`parseWellfoundFeed CDATA: ${JSON.stringify(cdataJobs[0])}`);
+  }
+
+  // empty / null input
+  if (parseWellfoundFeed('', 'X').length === 0 && parseWellfoundFeed(null, 'X').length === 0) {
+    pass('parseWellfoundFeed returns [] for empty / null input');
+  } else {
+    fail('parseWellfoundFeed should return [] for empty/null input');
+  }
+
+  // fetch() — integration with mock ctx
+  let fetchedUrl = null;
+  let fetchedOpts = null;
+  const mockCtx = {
+    async fetchText(url, opts) {
+      fetchedUrl = url;
+      fetchedOpts = opts;
+      return SAMPLE_RSS;
+    },
+  };
+  const fetched = await wellfound.fetch({ name: 'Wellfound', provider: 'wellfound' }, mockCtx);
+
+  if (fetchedUrl === 'https://wellfound.com/jobs.rss') {
+    pass('wellfound.fetch() requests the pinned RSS feed URL');
+  } else {
+    fail(`wellfound.fetch() fetched: ${JSON.stringify(fetchedUrl)}`);
+  }
+
+  if (fetchedOpts?.redirect === 'error') {
+    pass('wellfound.fetch() passes redirect:"error" to fetchText');
+  } else {
+    fail(`wellfound.fetch() redirect option: ${JSON.stringify(fetchedOpts?.redirect)}`);
+  }
+
+  if (fetched.length === 3) {
+    pass('wellfound.fetch() returns normalized jobs array');
+  } else {
+    fail(`wellfound.fetch() returned ${fetched.length} jobs (expected 3)`);
+  }
+
+} catch (e) {
+  fail(`wellfound provider tests crashed: ${e.message}`);
+}
+
+console.log('\n64. Provider — JobVite (jobvite.com API)');
+try {
+  const {
+    default: jobvite,
+    resolveCompanyId,
+    parseJobviteResponse,
+  } = await import(pathToFileURL(join(ROOT, 'providers/jobvite.mjs')).href);
+
+  // id
+  if (jobvite.id === 'jobvite') {
+    pass('jobvite.id is "jobvite"');
+  } else {
+    fail(`jobvite.id is "${jobvite.id}"`);
+  }
+
+  // ── resolveCompanyId ───────────────────────────────────────────
+
+  // careers_url bare slug
+  if (resolveCompanyId({ careers_url: 'https://jobs.jobvite.com/stripe' }) === 'stripe') {
+    pass('resolveCompanyId extracts slug from bare careers_url');
+  } else {
+    fail(`resolveCompanyId bare: ${resolveCompanyId({ careers_url: 'https://jobs.jobvite.com/stripe' })}`);
+  }
+
+  // careers_url with /jobs path
+  if (resolveCompanyId({ careers_url: 'https://jobs.jobvite.com/stripe/jobs' }) === 'stripe') {
+    pass('resolveCompanyId extracts slug from careers_url with /jobs suffix');
+  } else {
+    fail(`resolveCompanyId /jobs suffix: ${resolveCompanyId({ careers_url: 'https://jobs.jobvite.com/stripe/jobs' })}`);
+  }
+
+  // explicit api: URL takes precedence over careers_url
+  const apiEntry = {
+    api: 'https://jobs.jobvite.com/api/company/acme-corp/jobs',
+    careers_url: 'https://jobs.jobvite.com/other',
+  };
+  if (resolveCompanyId(apiEntry) === 'acme-corp') {
+    pass('resolveCompanyId prefers api: over careers_url');
+  } else {
+    fail(`resolveCompanyId api preference: ${resolveCompanyId(apiEntry)}`);
+  }
+
+  // null / wrong host / http / non-string
+  if (resolveCompanyId({}) === null) {
+    pass('resolveCompanyId returns null for empty entry');
+  } else {
+    fail('resolveCompanyId should return null for empty entry');
+  }
+  if (resolveCompanyId({ careers_url: 'https://evil.example.com/stripe' }) === null) {
+    pass('resolveCompanyId returns null for wrong host');
+  } else {
+    fail('resolveCompanyId should return null for wrong host (SSRF guard)');
+  }
+  if (resolveCompanyId({ careers_url: 'http://jobs.jobvite.com/stripe' }) === null) {
+    pass('resolveCompanyId returns null for non-https URL');
+  } else {
+    fail('resolveCompanyId should return null for non-https URL');
+  }
+  if (resolveCompanyId({ careers_url: null }) === null && resolveCompanyId({ careers_url: 42 }) === null) {
+    pass('resolveCompanyId returns null for non-string careers_url');
+  } else {
+    fail('resolveCompanyId should return null for non-string careers_url');
+  }
+
+  // ── detect() ───────────────────────────────────────────────────
+
+  const detectedUrl = jobvite.detect({ careers_url: 'https://jobs.jobvite.com/stripe' })?.url;
+  if (detectedUrl === 'https://jobs.jobvite.com/api/company/stripe/jobs') {
+    pass('jobvite.detect() builds correct API URL from careers_url');
+  } else {
+    fail(`jobvite.detect() url: ${JSON.stringify(detectedUrl)}`);
+  }
+
+  if (jobvite.detect({ careers_url: 'https://lever.co/stripe' }) === null) {
+    pass('jobvite.detect() returns null for non-Jobvite careers_url');
+  } else {
+    fail('jobvite.detect() should return null for non-Jobvite URL');
+  }
+
+  if (jobvite.detect({}) === null) {
+    pass('jobvite.detect() returns null for empty entry');
+  } else {
+    fail('jobvite.detect() should return null for empty entry');
+  }
+
+  // ── parseJobviteResponse ───────────────────────────────────────
+
+  const SAMPLE_RESPONSE = {
+    jobs: [
+      {
+        id: 'jv-1',
+        title: 'Senior Software Engineer',
+        location: 'San Francisco, CA',
+        country: 'US',
+        date: 'Mon, 02 Jun 2025 10:00:00 +0000',
+        applyURL: 'https://jobs.jobvite.com/stripe/job/senior-swe',
+        category: 'Engineering',
+        jobType: 'Full-Time',
+      },
+      {
+        id: 'jv-2',
+        title: 'Product Manager',
+        location: '',
+        country: 'UK',
+        date: 'Mon, 02 Jun 2025 11:00:00 +0000',
+        applyURL: 'https://jobs.jobvite.com/stripe/job/pm',
+      },
+      {
+        // no title — must be dropped
+        id: 'jv-3',
+        title: '',
+        location: 'Remote',
+        applyURL: 'https://jobs.jobvite.com/stripe/job/no-title',
+      },
+      {
+        // non-https applyURL — must be dropped
+        id: 'jv-4',
+        title: 'Bad URL Role',
+        location: 'Remote',
+        applyURL: 'http://jobs.jobvite.com/stripe/job/bad-url',
+      },
+      {
+        // missing applyURL — must be dropped
+        id: 'jv-5',
+        title: 'No URL Role',
+        location: 'Remote',
+      },
+      {
+        // branded domain applyURL — must be accepted (display-only, never fetched)
+        id: 'jv-6',
+        title: 'Branded Domain Role',
+        location: 'New York, NY',
+        country: 'US',
+        date: 'Mon, 02 Jun 2025 12:00:00 +0000',
+        applyURL: 'https://careers.stripe.com/jobs/branded-role',
+      },
+    ],
+  };
+
+  const jobs = parseJobviteResponse(SAMPLE_RESPONSE, 'Stripe');
+
+  // count — dropped: no title, non-https URL, missing URL
+  if (jobs.length === 4) {
+    pass('parseJobviteResponse returns 4 jobs (drops no-title, non-https, missing URL)');
+  } else {
+    fail(`parseJobviteResponse count: ${jobs.length} (expected 4)`);
+  }
+
+  // job 0 — full field mapping
+  if (jobs[0]?.title === 'Senior Software Engineer') {
+    pass('parseJobviteResponse maps title correctly');
+  } else {
+    fail(`parseJobviteResponse title: ${JSON.stringify(jobs[0]?.title)}`);
+  }
+  if (jobs[0]?.url === 'https://jobs.jobvite.com/stripe/job/senior-swe') {
+    pass('parseJobviteResponse maps applyURL to url');
+  } else {
+    fail(`parseJobviteResponse url: ${JSON.stringify(jobs[0]?.url)}`);
+  }
+  if (jobs[0]?.company === 'Stripe') {
+    pass('parseJobviteResponse sets company from entry.name');
+  } else {
+    fail(`parseJobviteResponse company: ${JSON.stringify(jobs[0]?.company)}`);
+  }
+  if (jobs[0]?.location === 'San Francisco, CA') {
+    pass('parseJobviteResponse maps location field');
+  } else {
+    fail(`parseJobviteResponse location: ${JSON.stringify(jobs[0]?.location)}`);
+  }
+  if (Number.isInteger(jobs[0]?.postedAt)) {
+    pass('parseJobviteResponse parses date to postedAt epoch ms');
+  } else {
+    fail(`parseJobviteResponse postedAt: ${JSON.stringify(jobs[0]?.postedAt)}`);
+  }
+
+  // job 1 — location fallback to country when location is empty string
+  if (jobs[1]?.location === 'UK') {
+    pass('parseJobviteResponse falls back to country when location is empty');
+  } else {
+    fail(`parseJobviteResponse location fallback: ${JSON.stringify(jobs[1]?.location)}`);
+  }
+
+  // job 3 — branded domain applyURL accepted
+  if (jobs[3]?.url === 'https://careers.stripe.com/jobs/branded-role') {
+    pass('parseJobviteResponse accepts branded-domain applyURL (display-only)');
+  } else {
+    fail(`parseJobviteResponse branded URL: ${JSON.stringify(jobs[3]?.url)}`);
+  }
+
+  // null / bad input
+  if (parseJobviteResponse(null, 'X').length === 0) {
+    pass('parseJobviteResponse returns [] for null input');
+  } else {
+    fail('parseJobviteResponse should return [] for null input');
+  }
+  if (parseJobviteResponse({ jobs: 'not-an-array' }, 'X').length === 0) {
+    pass('parseJobviteResponse returns [] when jobs field is not an array');
+  } else {
+    fail('parseJobviteResponse should return [] when jobs is not an array');
+  }
+
+  // ── fetch() integration ────────────────────────────────────────
+
+  let capturedUrl = null;
+  let capturedOpts = null;
+  const mockCtx = {
+    async fetchJson(url, opts) {
+      capturedUrl = url;
+      capturedOpts = opts;
+      return SAMPLE_RESPONSE;
+    },
+  };
+
+  const fetched = await jobvite.fetch(
+    { name: 'Stripe', careers_url: 'https://jobs.jobvite.com/stripe' },
+    mockCtx,
+  );
+
+  if (capturedUrl === 'https://jobs.jobvite.com/api/company/stripe/jobs') {
+    pass('jobvite.fetch() requests the correct API URL');
+  } else {
+    fail(`jobvite.fetch() fetched: ${JSON.stringify(capturedUrl)}`);
+  }
+
+  if (capturedOpts?.redirect === 'error') {
+    pass('jobvite.fetch() passes redirect:"error" to fetchJson');
+  } else {
+    fail(`jobvite.fetch() redirect option: ${JSON.stringify(capturedOpts?.redirect)}`);
+  }
+
+  if (fetched.length === 4) {
+    pass('jobvite.fetch() returns normalized jobs array');
+  } else {
+    fail(`jobvite.fetch() returned ${fetched.length} jobs (expected 4)`);
+  }
+
+  // fetch() throws when company ID cannot be resolved
+  let threw = false;
+  try {
+    await jobvite.fetch({ name: 'NoSlug' }, { async fetchJson() { return {}; } });
+  } catch {
+    threw = true;
+  }
+  if (threw) {
+    pass('jobvite.fetch() throws when company ID cannot be resolved');
+  } else {
+    fail('jobvite.fetch() should throw when company ID is missing');
+  }
+
+} catch (e) {
+  fail(`jobvite provider tests crashed: ${e.message}`);
+}
+
+// ── SUMMARY ─────────────────────────────────────────────────────
+
+console.log('\n' + '='.repeat(50));
+console.log(`📊 Results: ${passed} passed, ${failed} failed, ${warnings} warnings`);
 await runDiscovered();
 
 finish();
